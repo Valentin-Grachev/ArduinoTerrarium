@@ -10,10 +10,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 #include "esp32-hal-bt.h"
 #include "esp_gap_bt_api.h"
 
+#include "HourHistory.h"
 #include "SensorHistory.h"
 #include "index_html.h"
 
@@ -38,6 +40,10 @@ constexpr size_t kPassMax = 63;
 constexpr char kHostname[] = "terrarium";
 constexpr char kBtName[] = "Terrarium";
 constexpr char kNvsNamespace[] = "terrarium";
+constexpr char kTimeZone[] = "MSK-3";
+constexpr uint32_t kHourPersistMs = 15UL * 60UL * 1000UL;
+constexpr uint32_t kHourSaveRetryMs = 30000;
+constexpr int kClockValidYear = 2016;
 
 enum class RunMode : uint8_t {
   Idle,
@@ -50,9 +56,19 @@ enum class RunMode : uint8_t {
 Adafruit_AHTX0 aht;
 WebServer server(80);
 SensorHistory history;
+HourHistory hourHistory;
 BluetoothSerial serialBt;
 
-char jsonBuf[2048];
+char jsonBuf[4096];
+bool ntpStarted = false;
+bool liveValid = false;
+float liveTemperature = 0;
+float liveHumidity = 0;
+time_t trackedHour = 0;
+bool hourSaveSoon = false;
+bool hourSaveFailed = false;
+uint32_t lastHourSaveMs = 0;
+uint32_t lastHourSaveAttemptMs = 0;
 uint32_t lastSampleMs = 0;
 uint32_t lastWifiAttemptMs = 0;
 bool wifiWasConnected = false;
@@ -109,6 +125,87 @@ bool appendFmt(char*& cursor, char* end, const char* fmt, ...) {
   return true;
 }
 
+bool clockIsSynced() {
+  time_t now = 0;
+  time(&now);
+  struct tm local = {};
+  if (localtime_r(&now, &local) == nullptr) {
+    return false;
+  }
+  return local.tm_year > (kClockValidYear - 1900);
+}
+
+time_t currentHourStart() {
+  if (!clockIsSynced()) {
+    return 0;
+  }
+
+  time_t now = 0;
+  time(&now);
+  struct tm local = {};
+  if (localtime_r(&now, &local) == nullptr) {
+    return 0;
+  }
+  local.tm_min = 0;
+  local.tm_sec = 0;
+  local.tm_isdst = -1;
+  const time_t start = mktime(&local);
+  if (start <= 0) {
+    return 0;
+  }
+  return start;
+}
+
+void maintainClock() {
+  if (WiFi.status() != WL_CONNECTED || ntpStarted) {
+    return;
+  }
+  configTzTime(kTimeZone, "pool.ntp.org", "time.nist.gov");
+  ntpStarted = true;
+  Serial.println("NTP started");
+}
+
+void persistHourHistory() {
+  const time_t hour = currentHourStart();
+  if (hour > 0) {
+    if (trackedHour != 0 && hour != trackedHour) {
+      hourSaveSoon = true;
+    }
+    trackedHour = hour;
+  }
+
+  if (!hourHistory.dirty()) {
+    hourSaveSoon = false;
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (!hourSaveSoon && now - lastHourSaveMs < kHourPersistMs) {
+    return;
+  }
+  if (hourSaveFailed && now - lastHourSaveAttemptMs < kHourSaveRetryMs) {
+    return;
+  }
+
+  lastHourSaveAttemptMs = now;
+  if (!hourHistory.save(kNvsNamespace)) {
+    hourSaveFailed = true;
+    Serial.println("Hour history save failed");
+    return;
+  }
+  hourSaveFailed = false;
+  hourSaveSoon = false;
+  lastHourSaveMs = now;
+  Serial.println("Hour history saved");
+}
+
+bool appendLive(char*& cursor, char* end, float value, const char* format) {
+  if (!liveValid) {
+    return appendFmt(cursor, end, "null");
+  }
+  return appendFmt(cursor, end, format, static_cast<double>(value));
+}
+
 bool appendSeries(char*& cursor, char* end, bool temperatureSeries) {
   for (size_t i = 0; i < SensorHistory::kCapacity; ++i) {
     if (i > 0 && !appendFmt(cursor, end, ",")) {
@@ -133,14 +230,70 @@ bool appendSeries(char*& cursor, char* end, bool temperatureSeries) {
   return true;
 }
 
+bool appendHourSeries(char*& cursor, char* end, time_t currentHour, bool temperatureSeries) {
+  for (size_t i = 0; i < HourHistory::kCapacity; ++i) {
+    if (i > 0 && !appendFmt(cursor, end, ",")) {
+      return false;
+    }
+
+    const HourHistory::Point point = hourHistory.at(i, currentHour);
+    if (!point.valid) {
+      if (!appendFmt(cursor, end, "null")) {
+        return false;
+      }
+      continue;
+    }
+
+    const float value = temperatureSeries ? point.temperature : point.humidity;
+    const char* format = temperatureSeries ? "%.2f" : "%.1f";
+    if (!appendFmt(cursor, end, format, static_cast<double>(value))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool appendHourLabels(char*& cursor, char* end, time_t currentHour) {
+  for (size_t i = 0; i < HourHistory::kCapacity; ++i) {
+    if (i > 0 && !appendFmt(cursor, end, ",")) {
+      return false;
+    }
+
+    char label[16] = {};
+    if (currentHour > 0) {
+      const time_t age = static_cast<time_t>(HourHistory::kCapacity - 1 - i);
+      const time_t want = currentHour - age * 3600;
+      struct tm local = {};
+      if (localtime_r(&want, &local) != nullptr) {
+        strftime(label, sizeof(label), "%d.%m %H:%M", &local);
+      }
+    }
+    if (!appendFmt(cursor, end, "\"%s\"", label)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const char* buildHistoryJson() {
+  const time_t currentHour = currentHourStart();
   char* cursor = jsonBuf;
   char* end = jsonBuf + sizeof(jsonBuf);
-  if (!appendFmt(cursor, end, "{\"interval_s\":1,\"capacity\":%u,\"temperature\":[",
-                 static_cast<unsigned>(SensorHistory::kCapacity)) ||
+  if (!appendFmt(cursor, end, "{\"synced\":%s,\"live_temperature\":",
+                 currentHour > 0 ? "true" : "false") ||
+      !appendLive(cursor, end, liveTemperature, "%.2f") ||
+      !appendFmt(cursor, end, ",\"live_humidity\":") ||
+      !appendLive(cursor, end, liveHumidity, "%.1f") ||
+      !appendFmt(cursor, end, ",\"temperature\":[") ||
       !appendSeries(cursor, end, true) ||
       !appendFmt(cursor, end, "],\"humidity\":[") ||
       !appendSeries(cursor, end, false) ||
+      !appendFmt(cursor, end, "],\"history_labels\":[") ||
+      !appendHourLabels(cursor, end, currentHour) ||
+      !appendFmt(cursor, end, "],\"history_temperature\":[") ||
+      !appendHourSeries(cursor, end, currentHour, true) ||
+      !appendFmt(cursor, end, "],\"history_humidity\":[") ||
+      !appendHourSeries(cursor, end, currentHour, false) ||
       !appendFmt(cursor, end, "]}")) {
     return nullptr;
   }
@@ -173,6 +326,13 @@ void sampleSensor() {
   sensors_event_t temp;
   if (aht.getEvent(&humidity, &temp)) {
     history.push(temp.temperature, humidity.relative_humidity, true);
+    liveValid = true;
+    liveTemperature = temp.temperature;
+    liveHumidity = humidity.relative_humidity;
+    const time_t hour = currentHourStart();
+    if (hour > 0 && hourHistory.add(temp.temperature, humidity.relative_humidity, hour)) {
+      hourSaveSoon = true;
+    }
     Serial.printf("Temperature: %.2f C, Humidity: %.1f%%\n", temp.temperature,
                   humidity.relative_humidity);
   } else {
@@ -722,6 +882,13 @@ void setup() {
   WiFi.persistent(false);
 
   loadCredentials();
+  if (hourHistory.load(kNvsNamespace)) {
+    Serial.println("Hour history restored");
+  } else {
+    Serial.println("Hour history empty");
+  }
+  lastHourSaveMs = millis();
+
   if (hasSavedCreds) {
     beginSavedNow();
     mode = RunMode::ConnectingSaved;
@@ -742,7 +909,9 @@ void loop() {
   } else if (shouldMaintainSavedWifi()) {
     maintainSavedWifi();
   }
+  maintainClock();
   sampleSensor();
+  persistHourHistory();
   if (serverStarted) {
     server.handleClient();
   }

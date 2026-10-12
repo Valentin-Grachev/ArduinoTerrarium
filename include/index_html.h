@@ -21,12 +21,12 @@ static const char INDEX_HTML[] PROGMEM = R"INDEXHTML(<!DOCTYPE html>
     padding: 24px 16px 48px;
   }
   h1 {
-    margin: 0 0 4px;
+    margin: 0 0 16px;
     font-size: 1.5rem;
     font-weight: 600;
   }
   .subtitle {
-    margin: 0 0 16px;
+    margin: 0 0 12px;
     color: #5c6b7a;
   }
   .readings {
@@ -52,6 +52,27 @@ static const char INDEX_HTML[] PROGMEM = R"INDEXHTML(<!DOCTYPE html>
     font-size: 2rem;
     font-variant-numeric: tabular-nums;
   }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .tab {
+    flex: 1;
+    border: 1px solid #e1e6ec;
+    background: #fff;
+    color: #1c2430;
+    border-radius: 999px;
+    padding: 10px 12px;
+    font: inherit;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  .tab.active {
+    background: #1c2430;
+    color: #fff;
+    border-color: #1c2430;
+  }
   .chart {
     padding: 14px 12px 8px;
     margin-bottom: 12px;
@@ -66,12 +87,12 @@ static const char INDEX_HTML[] PROGMEM = R"INDEXHTML(<!DOCTYPE html>
     display: block;
   }
   .status { margin: 4px 8px 0; }
+  .panel[hidden] { display: none; }
 </style>
 </head>
 <body>
 <main>
   <h1>Террариум</h1>
-  <p class="subtitle">Последняя минута, шаг 1 секунда</p>
   <div class="readings">
     <div class="card">
       <div class="label">Температура</div>
@@ -82,33 +103,51 @@ static const char INDEX_HTML[] PROGMEM = R"INDEXHTML(<!DOCTYPE html>
       <div class="value" id="hum">—</div>
     </div>
   </div>
-  <section class="chart">
-    <h2>Температура, °C</h2>
-    <canvas id="tempChart"></canvas>
-  </section>
-  <section class="chart">
-    <h2>Влажность, %</h2>
-    <canvas id="humChart"></canvas>
-  </section>
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab active" id="tabNow" role="tab" aria-selected="true" aria-controls="panelNow">Сейчас</button>
+    <button type="button" class="tab" id="tabHistory" role="tab" aria-selected="false" aria-controls="panelHistory">История</button>
+  </div>
+  <p class="subtitle" id="subtitle">Последняя минута, шаг 1 секунда</p>
+  <div id="panelNow">
+    <section class="chart">
+      <h2>Температура, °C</h2>
+      <canvas id="tempChart"></canvas>
+    </section>
+    <section class="chart">
+      <h2>Влажность, %</h2>
+      <canvas id="humChart"></canvas>
+    </section>
+  </div>
+  <div id="panelHistory" hidden>
+    <section class="chart">
+      <h2>Температура, °C</h2>
+      <canvas id="histTempChart"></canvas>
+    </section>
+    <section class="chart">
+      <h2>Влажность, %</h2>
+      <canvas id="histHumChart"></canvas>
+    </section>
+  </div>
   <p class="status" id="status">Ожидание данных…</p>
 </main>
 <script>
 const tempCanvas = document.getElementById("tempChart");
 const humCanvas = document.getElementById("humChart");
+const histTempCanvas = document.getElementById("histTempChart");
+const histHumCanvas = document.getElementById("histHumChart");
 let lastData = null;
 let busy = false;
+let view = "now";
 
-function latest(values) {
-  for (let i = values.length - 1; i >= 0; i--) {
-    if (values[i] !== null && Number.isFinite(values[i])) return values[i];
-  }
-  return null;
+function readingText(value, digits, unit) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return value.toFixed(digits) + " " + unit;
 }
 
-function drawChart(canvas, values, color) {
+function drawChart(canvas, values, color, labels) {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
-  if (width < 10 || height < 10) return;
+  if (width < 10 || height < 10 || !values.length) return;
 
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(width * dpr);
@@ -117,7 +156,7 @@ function drawChart(canvas, values, color) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const pad = { left: 48, right: 16, top: 12, bottom: 28 };
+  const pad = { left: 48, right: 16, top: 12, bottom: labels ? 32 : 28 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
   const nums = values.filter(function (v) { return v !== null && Number.isFinite(v); });
@@ -161,12 +200,32 @@ function drawChart(canvas, values, color) {
   }
 
   ctx.textBaseline = "top";
-  const span = values.length;
-  for (let step = 0; step <= span; step += 10) {
-    const ago = span - step;
-    const x = pad.left + (step / span) * plotW;
-    ctx.textAlign = step === 0 ? "left" : (step === span ? "right" : "center");
-    ctx.fillText(ago === 0 ? "0" : "\u2212" + ago, x, pad.top + plotH + 8);
+  ctx.fillStyle = "#5c6b7a";
+  if (labels && labels.length) {
+    ctx.font = "11px system-ui, sans-serif";
+    const step = width < 520 ? 12 : 6;
+    let lastDrawnX = -1000;
+    const lastIndex = values.length - 1;
+    for (let i = 0; i < values.length; i++) {
+      const last = i === lastIndex;
+      if (i % step !== 0 && !last) continue;
+      const text = labels[i] || "";
+      if (!text) continue;
+      const x = xAt(i);
+      if (last && x - lastDrawnX < 72) continue;
+      ctx.textAlign = i === 0 ? "left" : (last ? "right" : "center");
+      ctx.fillText(text, x, pad.top + plotH + 8);
+      lastDrawnX = x;
+    }
+  } else {
+    ctx.font = "12px system-ui, sans-serif";
+    const span = values.length;
+    for (let step = 0; step <= span; step += 10) {
+      const ago = span - step;
+      const x = pad.left + (step / span) * plotW;
+      ctx.textAlign = step === 0 ? "left" : (step === span ? "right" : "center");
+      ctx.fillText(ago === 0 ? "0" : "\u2212" + ago, x, pad.top + plotH + 8);
+    }
   }
 
   ctx.strokeStyle = color;
@@ -207,15 +266,45 @@ function drawChart(canvas, values, color) {
   }
 }
 
+function statusText() {
+  if (view === "now") return "Данные обновляются раз в секунду";
+  if (!lastData || !lastData.synced) {
+    return "Нет сетевого времени. История появится после подключения к Wi-Fi";
+  }
+  return "Час считается по московскому времени";
+}
+
 function render() {
   if (!lastData) return;
-  drawChart(tempCanvas, lastData.temperature, "#d35400");
-  drawChart(humCanvas, lastData.humidity, "#1d6fbf");
-  const temp = latest(lastData.temperature);
-  const hum = latest(lastData.humidity);
-  document.getElementById("temp").textContent = temp === null ? "—" : temp.toFixed(2) + " °C";
-  document.getElementById("hum").textContent = hum === null ? "—" : hum.toFixed(1) + " %";
+  if (view === "now") {
+    drawChart(tempCanvas, lastData.temperature, "#d35400");
+    drawChart(humCanvas, lastData.humidity, "#1d6fbf");
+  } else {
+    drawChart(histTempCanvas, lastData.history_temperature, "#d35400", lastData.history_labels);
+    drawChart(histHumCanvas, lastData.history_humidity, "#1d6fbf", lastData.history_labels);
+  }
+  document.getElementById("temp").textContent = readingText(lastData.live_temperature, 2, "°C");
+  document.getElementById("hum").textContent = readingText(lastData.live_humidity, 1, "%");
+  document.getElementById("status").textContent = statusText();
 }
+
+function setView(next) {
+  view = next;
+  const now = view === "now";
+  document.getElementById("panelNow").hidden = !now;
+  document.getElementById("panelHistory").hidden = now;
+  document.getElementById("tabNow").classList.toggle("active", now);
+  document.getElementById("tabHistory").classList.toggle("active", !now);
+  document.getElementById("tabNow").setAttribute("aria-selected", now ? "true" : "false");
+  document.getElementById("tabHistory").setAttribute("aria-selected", now ? "false" : "true");
+  document.getElementById("subtitle").textContent = now
+    ? "Последняя минута, шаг 1 секунда"
+    : "Последние 48 часов, среднее за час";
+  render();
+}
+
+document.getElementById("tabNow").addEventListener("click", function () { setView("now"); });
+document.getElementById("tabHistory").addEventListener("click", function () { setView("history"); });
 
 async function tick() {
   if (busy) return;
@@ -224,12 +313,13 @@ async function tick() {
     const res = await fetch("/api/history", { cache: "no-store" });
     if (!res.ok) throw new Error("http");
     const data = await res.json();
-    if (!data || !Array.isArray(data.temperature) || !Array.isArray(data.humidity)) {
+    if (!data || !Array.isArray(data.temperature) || !Array.isArray(data.humidity) ||
+        !Array.isArray(data.history_temperature) || !Array.isArray(data.history_humidity) ||
+        !Array.isArray(data.history_labels)) {
       throw new Error("payload");
     }
     lastData = data;
     render();
-    document.getElementById("status").textContent = "Данные обновляются раз в секунду";
   } catch (err) {
     document.getElementById("status").textContent = "Нет связи с ESP32";
   } finally {
