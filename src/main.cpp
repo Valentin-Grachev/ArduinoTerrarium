@@ -3,6 +3,7 @@
 #include "BluetoothCommandListener.h"
 #include "TemperatureHumiditySensor.h"
 #include "MeasureStorage.h"
+#include "Button.h"
 
 const int SDA_PIN = 21;
 const int SCL_PIN = 22;
@@ -10,9 +11,10 @@ const char* BLUETOOTH_NAME = "ESP32";
 const char* STORAGE_FILE_PATH = "/measures.csv";
 
 Led led(LED_BUILTIN);
-BluetoothCommandListener commandListener(BLUETOOTH_NAME);
+BluetoothCommandListener bluetoothListener(BLUETOOTH_NAME);
 TemperatureHumiditySensor sensor(SDA_PIN, SCL_PIN);
 MeasureStorage storage(STORAGE_FILE_PATH);
+Button button(0);
 
 
 void setup() {
@@ -20,16 +22,13 @@ void setup() {
 
     sensor.enable();
 
-    commandListener.enable();
-    commandListener.onCommandReceived = [](const String& command) {
+    button.onClick = []() {
+        bluetoothListener.enable();
+        led.blink();
+    };
 
-        if (command == "led on") {
-            led.blink();
-        }
-
-        if (command == "led off") {
-            led.off();
-        }
+    bluetoothListener.onCommandReceived = [](const String& command) {
+        led.off();
 
         if (command == "sensor t") {
             if (sensor.isAvailable()) {
@@ -69,6 +68,7 @@ void setup() {
 
 void loop() {
     led.update();
-    commandListener.update();
+    bluetoothListener.update();
     sensor.update();
+    button.update();
 }
