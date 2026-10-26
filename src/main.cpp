@@ -2,14 +2,17 @@
 #include "Led.h"
 #include "BluetoothCommandListener.h"
 #include "TemperatureHumiditySensor.h"
+#include "MeasureStorage.h"
 
 const int SDA_PIN = 21;
 const int SCL_PIN = 22;
 const char* BLUETOOTH_NAME = "ESP32";
+const char* STORAGE_FILE_PATH = "/measures.csv";
 
 Led led(LED_BUILTIN);
 BluetoothCommandListener commandListener(BLUETOOTH_NAME);
 TemperatureHumiditySensor sensor(SDA_PIN, SCL_PIN);
+MeasureStorage storage(STORAGE_FILE_PATH);
 
 
 void setup() {
@@ -43,6 +46,23 @@ void setup() {
                 Serial.println("Sensor is not available");
             }
         }
+
+        if (command == "storage save") {
+            bool success = storage.save(0, sensor.getHumidity(), sensor.getTemperature());
+            Serial.printf("Save status: %s\n", success ? "SUCCESS" : "ERROR");
+        }
+
+        if (command == "storage read") {
+            Serial.printf("%s\n", storage.getData());
+        }
+
+        if (command == "storage clear") {
+            bool success = storage.clear();
+            Serial.printf("Clear status: %s\n", success ? "SUCCESS" : "ERROR");
+        }
+
+
+
     };
 
 }

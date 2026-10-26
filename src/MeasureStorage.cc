@@ -2,9 +2,21 @@
 #include <LittleFS.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 constexpr int MAX_MEASURES = 2000;
 constexpr int CLEAR_LINES = 500;
+constexpr char CSV_HEADER[] = "utcTimestamp,temperature,humidity\n";
+
+static String getTempFilePath(const char* filePath) {
+    return String(filePath) + ".tmp";
+}
+
+static char* createEmptyString() {
+    char* data = static_cast<char*>(malloc(1));
+    if (data) data[0] = '\0';
+    return data;
+}
 
 
 MeasureStorage::MeasureStorage(const char* filePath) { 
@@ -13,19 +25,19 @@ MeasureStorage::MeasureStorage(const char* filePath) {
 }
 
 bool MeasureStorage::initialize() {
-    if (_isInitialized || !LittleFS.begin(false)) 
+    if (_isInitialized) 
         return false;
 
+    if (!LittleFS.begin(true)) 
+        return false;
+
+    String tempPath = getTempFilePath(_filePath);
+    if (!LittleFS.exists(_filePath) && LittleFS.exists(tempPath.c_str())) {
+        if (!LittleFS.rename(tempPath.c_str(), _filePath)) return false;
+    }
+
     if (!LittleFS.exists(_filePath)) {
-        File file = LittleFS.open(_filePath, FILE_WRITE);
-        if (!file) return false;
-
-        file.println("utcTimestamp,temperature,humidity");
-
-        bool success = file.getWriteError() == 0;
-        file.close();
-
-        if (!success) return false;
+        if (!tryCreateFileWithHeader()) return false;
     }
 
     _isInitialized = true;
@@ -111,14 +123,33 @@ bool MeasureStorage::tryGetAverage(uint32_t fromUtcTimestamp, uint32_t toUtcTime
 }
 
 
+bool MeasureStorage::tryCreateFileWithHeader() {
+    File file = LittleFS.open(_filePath, FILE_WRITE);
+    if (!file) return false;
+
+    size_t written = file.print(CSV_HEADER);
+    bool success = written == sizeof(CSV_HEADER) - 1 && file.getWriteError() == 0;
+    file.close();
+
+    if (!success) LittleFS.remove(_filePath);
+
+    return success;
+}
+
 bool MeasureStorage::tryRemoveFileLines(int fromIndex, int toIndex) {
     if (fromIndex < 0 || toIndex < fromIndex) 
         return false;
 
+    String tempPath = getTempFilePath(_filePath);
+    if (tempPath.length() == 0 || tempPath == _filePath)
+        return false;
+
+    LittleFS.remove(tempPath.c_str());
+
     File source = LittleFS.open(_filePath, FILE_READ);
     if (!source) return false;
 
-    File temp = LittleFS.open("/temp.csv", FILE_WRITE);
+    File temp = LittleFS.open(tempPath.c_str(), FILE_WRITE);
     if (!temp) {
         source.close();
         return false;
@@ -130,10 +161,12 @@ bool MeasureStorage::tryRemoveFileLines(int fromIndex, int toIndex) {
         String line = source.readStringUntil('\n');
 
         if (index < fromIndex || index > toIndex) {
-            if (temp.println(line) == 0) {
+            line.trim();
+
+            if (temp.print(line) == 0 || temp.print('\n') == 0) {
                 source.close();
                 temp.close();
-                LittleFS.remove("/temp.csv");
+                LittleFS.remove(tempPath.c_str());
                 return false;
             }
         }
@@ -142,14 +175,29 @@ bool MeasureStorage::tryRemoveFileLines(int fromIndex, int toIndex) {
     }
 
     source.close();
+
+    bool success = temp.getWriteError() == 0;
     temp.close();
 
-    if (!LittleFS.remove(_filePath)) {
-        LittleFS.remove("/temp.csv");
+    if (!success) {
+        LittleFS.remove(tempPath.c_str());
         return false;
     }
 
-    return LittleFS.rename("/temp.csv", _filePath);
+    success = LittleFS.rename(tempPath.c_str(), _filePath);
+    if (success) return true;
+
+    if (!LittleFS.remove(_filePath)) {
+        LittleFS.remove(tempPath.c_str());
+        return false;
+    }
+
+    success = LittleFS.rename(tempPath.c_str(), _filePath);
+    if (!success) {
+        _isInitialized = false;
+    }
+
+    return success;
 }
 
 bool MeasureStorage::tryAddFileLine(uint32_t utcTimestamp, float temperature, float humidity) {
@@ -186,9 +234,33 @@ bool MeasureStorage::tryGetFileLinesCount(int& lines) {
 }
 
 bool MeasureStorage::clear() {
+    if (!_isInitialized && !initialize())
+        return false;
 
+    bool success = tryCreateFileWithHeader();
+    if (!success) _isInitialized = false;
+
+    return success;
 }
 
 char* MeasureStorage::getData() {
+    if (!LittleFS.begin(true) || !LittleFS.exists(_filePath))
+        return createEmptyString();
 
+    File file = LittleFS.open(_filePath, FILE_READ);
+    if (!file) return createEmptyString();
+
+    size_t fileSize = file.size();
+    char* data = static_cast<char*>(malloc(fileSize + 1));
+    if (!data) {
+        file.close();
+        return nullptr;
+    }
+
+    size_t bytesRead = file.readBytes(data, fileSize);
+    data[bytesRead] = '\0';
+
+    file.close();
+
+    return data;
 }

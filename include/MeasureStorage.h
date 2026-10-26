@@ -12,6 +12,7 @@ public:
 
 private:
     bool initialize();
+    bool tryCreateFileWithHeader();
     bool tryRemoveFileLines(int fromIndex, int toIndex);
     bool tryAddFileLine(uint32_t utcTimestamp, float temperature, float humidity);
     bool tryGetFileLinesCount(int& lines);

@@ -1,7 +1,7 @@
 #include "TemperatureHumiditySensor.h"
 #include "Wire.h"
 
-static constexpr uint32_t UPDATE_VALUES_INTERVAL_MS = 1000;
+static constexpr uint32_t UPDATE_VALUES_INTERVAL_MS = 500;
 
 TemperatureHumiditySensor::TemperatureHumiditySensor(int sdaPin, int sclPin) {
     _sdaPin = sdaPin;
