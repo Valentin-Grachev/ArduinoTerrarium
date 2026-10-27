@@ -1,22 +1,25 @@
 #include "WifiConnection.h"
 #include <WiFi.h>
+#include <utility>
 
-constexpr uint32_t CONNECTION_TIMEOUT_MS = 10000;
-
+constexpr uint32_t CONNECTION_TIMEOUT_MS = 5000;
 
 WifiConnection::WifiConnection() {
     _wifiState = WIFI_DISCONNECTED;
+    _startConnectionTime = 0;
+    _linkLostTime = 0;
+    _isLinkLost = false;
 }
 
-void WifiConnection::connect(const char* ssid, const char* password, std::function<void(bool)> onHandled) {
+void WifiConnection::connect(const char* ssid, const char* password) {
     if (_wifiState != WIFI_DISCONNECTED) {
-        if (onHandled) onHandled(false);
+        if (onConnectHandled) onConnectHandled(false);
         return;
     }
 
     _wifiState = WIFI_CONNECTING;
-    _onConnectHandled = onHandled;
     _startConnectionTime = millis();
+    _isLinkLost = false;
 
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
@@ -27,37 +30,55 @@ void WifiConnection::disconnect() {
     if (_wifiState == WIFI_DISCONNECTED) return;
 
     WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+
+    if (_wifiState == WIFI_CONNECTING) {
+        _wifiState = WIFI_DISCONNECTED;
+        if (onConnectHandled) onConnectHandled(false);
+        return;
+    }
 
     _wifiState = WIFI_DISCONNECTED;
+    _isLinkLost = false;
+
     if (onDisconnected) onDisconnected();
 }
 
 void WifiConnection::update() {
-    bool isConnected = WiFi.status() == WL_CONNECTED;
+    bool connected = WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
 
     if (_wifiState == WIFI_CONNECTING) {
-        if (isConnected) {
+        if (connected) {
             _wifiState = WIFI_CONNECTED;
-            if (_onConnectHandled) _onConnectHandled(true);
+            _isLinkLost = false;
+            if (onConnectHandled) onConnectHandled(true);
             return;
         }
-        else if (millis() - _startConnectionTime > CONNECTION_TIMEOUT_MS) {
-            WiFi.disconnect(true);
-            WiFi.mode(WIFI_OFF);
-            _wifiState = WIFI_DISCONNECTED;
-            if (_onConnectHandled) _onConnectHandled(false);
-        }
-    }
 
-    if (!isConnected && _wifiState == WIFI_CONNECTED) {
-        disconnect();
+        if (millis() - _startConnectionTime > CONNECTION_TIMEOUT_MS) {
+            disconnect();
+        }
+
         return;
     }
-}
 
+    if (_wifiState != WIFI_CONNECTED) return;
+
+    if (connected) {
+        _isLinkLost = false;
+        return;
+    }
+
+    if (!_isLinkLost) {
+        _isLinkLost = true;
+        _linkLostTime = millis();
+        return;
+    }
+
+    if (millis() - _linkLostTime > CONNECTION_TIMEOUT_MS) {
+        disconnect();
+    }
+}
 
 String WifiConnection::getIp() const {
     return WiFi.localIP().toString();
 }
-

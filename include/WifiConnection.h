@@ -9,8 +9,9 @@ constexpr int WIFI_CONNECTED = 2;
 class WifiConnection {
 public:
     WifiConnection();
+    std::function<void(bool)> onConnectHandled;
     std::function<void()> onDisconnected;
-    void connect(const char* ssid, const char* password, std::function<void(bool)> onHandled);
+    void connect(const char* ssid, const char* password);
     void disconnect();
     void update();
     String getIp() const;
@@ -18,6 +19,7 @@ public:
 private:
     int _wifiState;
     uint32_t _startConnectionTime;
-    std::function<void(bool)> _onConnectHandled;
+    uint32_t _linkLostTime;
+    bool _isLinkLost;
 };
 
