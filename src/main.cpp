@@ -6,6 +6,7 @@
 #include "Button.h"
 #include "WifiConnection.h"
 #include <Preferences.h>
+#include "ClockModule.h"
 
 
 const int SDA_PIN = 21;
@@ -13,6 +14,7 @@ const int SCL_PIN = 22;
 const char* BLUETOOTH_NAME = "ESP32";
 const char* STORAGE_FILE_PATH = "/measures.csv";
 
+ClockModule clockModule;
 Led led(LED_BUILTIN);
 BluetoothCommandListener bluetoothListener(BLUETOOTH_NAME);
 TemperatureHumiditySensor sensor(SDA_PIN, SCL_PIN);
@@ -26,6 +28,11 @@ void setup() {
     Serial.begin(115200);
 
     sensor.enable();
+
+    clockModule.onSuccessSynced = []() {
+        Serial.println("Clock module sync: SUCCESS");
+    };
+    clockModule.sync();
 
     button.onClick = []() {
         bluetoothListener.enable();
@@ -41,6 +48,10 @@ void setup() {
     };
 
     bluetoothListener.onCommandReceived = [](const String& command) {
+
+        if (command == "clock sync") {
+            clockModule.sync();
+        }
 
         if (command == "sensor t") {
             if (sensor.isAvailable()) {
@@ -104,4 +115,5 @@ void loop() {
     sensor.update();
     button.update();
     wifi.update();
+    clockModule.update();
 }

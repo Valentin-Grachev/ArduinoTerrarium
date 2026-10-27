@@ -22,6 +22,7 @@ static char* createEmptyString() {
 MeasureStorage::MeasureStorage(const char* filePath) { 
     _filePath = filePath;
     _isInitialized = false;
+    _lastSaveTimeMs = 0;
 }
 
 bool MeasureStorage::initialize() {
@@ -46,6 +47,8 @@ bool MeasureStorage::initialize() {
 
 
 bool MeasureStorage::save(uint32_t utcTimestamp, float temperature, float humidity) {
+    _lastSaveTimeMs = millis();
+
     if (!_isInitialized && !initialize()) 
         return false; 
 
@@ -263,4 +266,23 @@ char* MeasureStorage::getData() {
     file.close();
 
     return data;
+}
+
+void MeasureStorage::setAutosave(ClockModule* clockModule, TemperatureHumiditySensor* sensor, uint32_t intervalMs) {
+    _clockModule = clockModule;
+    _sensor = sensor;
+    _autosaveIntervalMs = intervalMs;
+}
+
+void MeasureStorage::update() {
+    if (!_sensor || !_sensor->isAvailable() || !_clockModule || !_clockModule->isSynced()) return;
+
+    if (millis() - _lastSaveTimeMs > _autosaveIntervalMs) {
+
+        uint32_t saveTime = _clockModule->getUtcTimeSec();
+        float temperature = _sensor->getTemperature();
+        float humidity = _sensor->getHumidity();
+
+        save(saveTime, temperature, humidity);
+    }
 }
