@@ -11,11 +11,22 @@ WifiConnection::WifiConnection() {
     _isLinkLost = false;
 }
 
+void WifiConnection::reconnect() {
+    if (!_preferences.isKey("wifi_ssid") || !_preferences.isKey("wifi_pass"))
+        return;
+
+    connect(_preferences.getString("wifi_ssid").c_str(), _preferences.getString("wifi_pass").c_str());
+}
+
+
 void WifiConnection::connect(const char* ssid, const char* password) {
     if (_wifiState != WIFI_DISCONNECTED) {
         if (onConnectHandled) onConnectHandled(false);
         return;
     }
+
+    _ssid = ssid;
+    _password = password;
 
     _wifiState = WIFI_CONNECTING;
     _startConnectionTime = millis();
@@ -50,6 +61,10 @@ void WifiConnection::update() {
         if (connected) {
             _wifiState = WIFI_CONNECTED;
             _isLinkLost = false;
+
+            _preferences.putString("wifi_ssid", _ssid);
+            _preferences.putString("wifi_pass", _password);
+
             if (onConnectHandled) onConnectHandled(true);
             return;
         }

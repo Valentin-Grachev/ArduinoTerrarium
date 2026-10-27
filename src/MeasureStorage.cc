@@ -49,22 +49,33 @@ bool MeasureStorage::initialize() {
 bool MeasureStorage::save(uint32_t utcTimestamp, float temperature, float humidity) {
     _lastSaveTimeMs = millis();
 
-    if (!_isInitialized && !initialize()) 
+    if (!_isInitialized && !initialize()) {
+        if (onSaveHandled) onSaveHandled(false);
         return false; 
-
+    }
+        
     int linesCount = 0;
-    if (!tryGetFileLinesCount(linesCount))
+    if (!tryGetFileLinesCount(linesCount)) {
+        if (onSaveHandled) onSaveHandled(false);
         return false;
+    }  
 
-    if (linesCount < MAX_MEASURES) 
-        return tryAddFileLine(utcTimestamp, temperature, humidity);
+    if (linesCount < MAX_MEASURES)  {
+        bool success = tryAddFileLine(utcTimestamp, temperature, humidity);
+        if (onSaveHandled) onSaveHandled(success);
+        return success;
+    }
 
     else { // Escess capacity
 
-        if (!tryRemoveFileLines(1, CLEAR_LINES))
+        if (!tryRemoveFileLines(1, CLEAR_LINES)) {
+            if (onSaveHandled) onSaveHandled(false);
             return false;
+        }
 
-        return tryAddFileLine(utcTimestamp, temperature, humidity);
+        bool success = tryAddFileLine(utcTimestamp, temperature, humidity);
+        if (onSaveHandled) onSaveHandled(success);
+        return success;
     }
 }
 

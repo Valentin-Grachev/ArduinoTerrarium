@@ -2,11 +2,13 @@
 #include "TemperatureHumiditySensor.h"
 #include "ClockModule.h"
 #include <stdint.h>
+#include <functional>
 
 
 class MeasureStorage {
 public:
     MeasureStorage(const char* filePath);
+    std::function<void(bool success)> onSaveHandled;
     void setAutosave(ClockModule* clockModule, TemperatureHumiditySensor* sensor, uint32_t intervalMs);
     bool save(uint32_t utcTimestamp, float temperature, float humidity);
     bool tryGetAverageTemperature(uint32_t fromUtcTimestamp, uint32_t toUtcTimestamp, float& value);

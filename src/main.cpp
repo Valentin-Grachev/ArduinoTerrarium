@@ -8,11 +8,15 @@
 #include <Preferences.h>
 #include "ClockModule.h"
 
+#define SEC * 1000
+
 
 const int SDA_PIN = 21;
 const int SCL_PIN = 22;
+const int AUTOSAVE_INTERVAL_MS = 10 SEC;
 const char* BLUETOOTH_NAME = "ESP32";
 const char* STORAGE_FILE_PATH = "/measures.csv";
+
 
 ClockModule clockModule;
 Led led(LED_BUILTIN);
@@ -25,7 +29,16 @@ Preferences preferences;
 
 
 void setup() {
+
+    preferences.isKey("wifi_ssid");
+
     Serial.begin(115200);
+
+    storage.onSaveHandled = [](bool success) {
+        Serial.println(success ? "Save: SUCCESS" : "Save: ERROR");
+    };
+
+    storage.setAutosave(&clockModule, &sensor, AUTOSAVE_INTERVAL_MS);
 
     sensor.enable();
 
@@ -116,4 +129,5 @@ void loop() {
     button.update();
     wifi.update();
     clockModule.update();
+    storage.update();
 }
