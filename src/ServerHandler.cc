@@ -1,13 +1,13 @@
 #include "ServerHandler.h"
 #include <LittleFS.h>
 
-LocalServer::LocalServer(int port, MeasureStorage& storage, TemperatureHumiditySensor& sensor)
+ServerHandler::ServerHandler(int port, MeasureStorage* storage, TemperatureHumiditySensor* sensor)
     : _server(port), _storage(storage), _sensor(sensor), _isStarted(false) {
     _server.on("/", HTTP_GET, [this]() { handleRoot(); });
     _server.on("/api/climate", HTTP_GET, [this]() { handleClimate(); });
 }
 
-bool LocalServer::start() {
+bool ServerHandler::start() {
     if (_isStarted) return true;
 
     if (!LittleFS.begin(true)) return false;
@@ -17,20 +17,20 @@ bool LocalServer::start() {
     return true;
 }
 
-void LocalServer::stop() {
+void ServerHandler::stop() {
     if (!_isStarted) return;
 
     _server.stop();
     _isStarted = false;
 }
 
-void LocalServer::update() {
+void ServerHandler::update() {
     if (!_isStarted) return;
 
     _server.handleClient();
 }
 
-void LocalServer::handleRoot() {
+void ServerHandler::handleRoot() {
     File file = LittleFS.open("/index.html", FILE_READ);
     if (!file) {
         _server.send(404, "text/plain", "index.html not found");
@@ -41,13 +41,13 @@ void LocalServer::handleRoot() {
     file.close();
 }
 
-void LocalServer::handleClimate() {
+void ServerHandler::handleClimate() {
     String body = "{\"available\":";
-    body += _sensor.isAvailable() ? "true" : "false";
+    body += _sensor->isAvailable() ? "true" : "false";
     body += ",\"temperature\":";
-    body += String(_sensor.getTemperature(), 2);
+    body += String(_sensor->getTemperature(), 2);
     body += ",\"humidity\":";
-    body += String(_sensor.getHumidity(), 2);
+    body += String(_sensor->getHumidity(), 2);
     body += "}";
 
     _server.sendHeader("Cache-Control", "no-store");

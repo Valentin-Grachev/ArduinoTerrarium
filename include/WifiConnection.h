@@ -19,12 +19,15 @@ public:
     String getIp() const;
 
 private:
+    bool openPreferences();
+
     int _wifiState;
     uint32_t _startConnectionTime;
     uint32_t _linkLostTime;
     bool _isLinkLost;
+    bool _preferencesOpen;
     Preferences _preferences;
-    const char* _ssid;
-    const char* _password;
+    String _ssid;
+    String _password;
 };
 

@@ -5,15 +5,16 @@
 #include "MeasureStorage.h"
 #include "Button.h"
 #include "WifiConnection.h"
-#include <Preferences.h>
 #include "ClockModule.h"
+#include "ServerHandler.h"
 
-#define SEC * 1000
-
+const int SEC_MS = 1000;
+const int MIN_MS = 60000;
 
 const int SDA_PIN = 21;
 const int SCL_PIN = 22;
-const int AUTOSAVE_INTERVAL_MS = 10 SEC;
+const int SERVER_PORT = 80;
+const int AUTOSAVE_INTERVAL_MS = 10 * MIN_MS;
 const char* BLUETOOTH_NAME = "ESP32";
 const char* STORAGE_FILE_PATH = "/measures.csv";
 
@@ -25,39 +26,31 @@ TemperatureHumiditySensor sensor(SDA_PIN, SCL_PIN);
 MeasureStorage storage(STORAGE_FILE_PATH);
 Button button(0);
 WifiConnection wifi;
-Preferences preferences;
+ServerHandler serverHandler(SERVER_PORT, &storage, &sensor);
 
 
 void setup() {
-
-    preferences.isKey("wifi_ssid");
-
     Serial.begin(115200);
 
     storage.onSaveHandled = [](bool success) {
-        Serial.println(success ? "Save: SUCCESS" : "Save: ERROR");
+        Serial.println(success ? "Storage Write: SUCCESS" : "Storage Write: ERROR");
     };
-
-    storage.setAutosave(&clockModule, &sensor, AUTOSAVE_INTERVAL_MS);
-
-    sensor.enable();
 
     clockModule.onSuccessSynced = []() {
-        Serial.println("Clock module sync: SUCCESS");
+        Serial.println("Clock Sync: SUCCESS");
     };
-    clockModule.sync();
-
+    
     button.onClick = []() {
         bluetoothListener.enable();
         led.blink();
     };
 
     wifi.onConnectHandled = [](bool success) {
-        Serial.println(success ? "WiFi connect: SUCCESS" : "WiFi connect: ERROR");
+        Serial.println(success ? "WiFi Connect: SUCCESS" : "WiFi Connect: ERROR");
     };
 
     wifi.onDisconnected = [] {
-        Serial.println("WiFi disconnected");
+        Serial.println("WiFi Connect: DISCONNECTED");
     };
 
     bluetoothListener.onCommandReceived = [](const String& command) {
@@ -66,34 +59,13 @@ void setup() {
             clockModule.sync();
         }
 
-        if (command == "sensor t") {
-            if (sensor.isAvailable()) {
-                Serial.println(sensor.getTemperature());
-            } else {
-                Serial.println("Sensor is not available");
-            }
-        }
-
-        if (command == "sensor h") {
-            if (sensor.isAvailable()) {
-                Serial.println(sensor.getHumidity());
-            } else {
-                Serial.println("Sensor is not available");
-            }
-        }
-
-        if (command == "storage save") {
-            bool success = storage.save(0, sensor.getHumidity(), sensor.getTemperature());
-            Serial.printf("Save status: %s\n", success ? "SUCCESS" : "ERROR");
-        }
-
         if (command == "storage read") {
             Serial.printf("%s\n", storage.getData());
         }
 
         if (command == "storage clear") {
             bool success = storage.clear();
-            Serial.printf("Clear status: %s\n", success ? "SUCCESS" : "ERROR");
+            Serial.printf("Storage Clear: %s\n", success ? "SUCCESS" : "ERROR");
         }
 
         if (command.startsWith("wifi connect ")) {
@@ -115,11 +87,14 @@ void setup() {
             wifi.disconnect();
         }
 
-
-
-
     };
 
+
+
+    wifi.reconnect();
+    clockModule.sync();
+    sensor.enable();
+    storage.setAutosave(&clockModule, &sensor, AUTOSAVE_INTERVAL_MS);
 }
 
 void loop() {

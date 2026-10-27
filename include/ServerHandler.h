@@ -3,9 +3,9 @@
 #include "MeasureStorage.h"
 #include "TemperatureHumiditySensor.h"
 
-class LocalServer {
+class ServerHandler {
 public:
-    LocalServer(int port, MeasureStorage& storage, TemperatureHumiditySensor& sensor);
+    ServerHandler(int port, MeasureStorage* storage, TemperatureHumiditySensor* sensor);
 
     bool start();
     void stop();
@@ -16,7 +16,7 @@ private:
     void handleClimate();
 
     WebServer _server;
-    MeasureStorage& _storage;
-    TemperatureHumiditySensor& _sensor;
+    MeasureStorage* _storage;
+    TemperatureHumiditySensor* _sensor;
     bool _isStarted;
 };

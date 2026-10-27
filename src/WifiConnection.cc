@@ -9,13 +9,26 @@ WifiConnection::WifiConnection() {
     _startConnectionTime = 0;
     _linkLostTime = 0;
     _isLinkLost = false;
+    _preferencesOpen = false;
+}
+
+bool WifiConnection::openPreferences() {
+    if (_preferencesOpen) return true;
+    if (!_preferences.begin("wifi", false)) return false;
+
+    _preferencesOpen = true;
+    return true;
 }
 
 void WifiConnection::reconnect() {
-    if (!_preferences.isKey("wifi_ssid") || !_preferences.isKey("wifi_pass"))
+    if (!openPreferences() || !_preferences.isKey("wifi_ssid") || !_preferences.isKey("wifi_pass"))
         return;
 
-    connect(_preferences.getString("wifi_ssid").c_str(), _preferences.getString("wifi_pass").c_str());
+    String ssid = _preferences.getString("wifi_ssid");
+    String password = _preferences.getString("wifi_pass");
+    if (ssid.isEmpty()) return;
+
+    connect(ssid.c_str(), password.c_str());
 }
 
 
@@ -25,8 +38,8 @@ void WifiConnection::connect(const char* ssid, const char* password) {
         return;
     }
 
-    _ssid = ssid;
-    _password = password;
+    _ssid = ssid ? ssid : "";
+    _password = password ? password : "";
 
     _wifiState = WIFI_CONNECTING;
     _startConnectionTime = millis();
@@ -34,7 +47,7 @@ void WifiConnection::connect(const char* ssid, const char* password) {
 
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
-    WiFi.begin(ssid, password);
+    WiFi.begin(_ssid.c_str(), _password.c_str());
 }
 
 void WifiConnection::disconnect() {
@@ -62,8 +75,10 @@ void WifiConnection::update() {
             _wifiState = WIFI_CONNECTED;
             _isLinkLost = false;
 
-            _preferences.putString("wifi_ssid", _ssid);
-            _preferences.putString("wifi_pass", _password);
+            if (openPreferences()) {
+                _preferences.putString("wifi_ssid", _ssid);
+                _preferences.putString("wifi_pass", _password);
+            }
 
             if (onConnectHandled) onConnectHandled(true);
             return;
