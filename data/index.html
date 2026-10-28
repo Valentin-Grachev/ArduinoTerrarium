@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Террариум</title>
+<style>
+  :root {
+    --bg: #f3efe6;
+    --panel: #fffdf8;
+    --ink: #2c2824;
+    --muted: #6e675e;
+    --line: #e4ddd2;
+    --ok: #2f7d4a;
+    --bad: #b42318;
+    --humidity: #2f6f5e;
+    --temperature: #c46b3a;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.4 "Segoe UI", sans-serif;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 8px;
+    padding: 16px 16px 0;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+
+  .tabs button {
+    flex: 1;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .tabs button.active {
+    background: var(--panel);
+    color: var(--ink);
+    border-color: transparent;
+    font-weight: 600;
+  }
+
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+
+  .panel {
+    background: var(--panel);
+    border-radius: 16px;
+    padding: 20px;
+  }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .metric .label,
+  .chart-card h2 {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .metric .value {
+    display: block;
+    margin-top: 4px;
+    font-size: 32px;
+    font-weight: 650;
+  }
+
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 20px 0 0;
+    color: var(--muted);
+  }
+
+  .status .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #b9b3a8;
+  }
+
+  .status.ok { color: var(--ok); }
+  .status.ok .dot { background: var(--ok); }
+  .status.bad { color: var(--bad); }
+  .status.bad .dot { background: var(--bad); }
+
+  .chart-card + .chart-card { margin-top: 16px; }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 220px;
+    margin-top: 8px;
+  }
+
+  .message {
+    margin: 0;
+    padding: 24px 8px;
+    text-align: center;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+<nav class="tabs">
+  <button type="button" data-tab="current" class="active">Текущее</button>
+  <button type="button" data-tab="history">История</button>
+</nav>
+<main>
+  <section id="panel-current">
+    <div class="panel">
+      <div class="metrics">
+        <div class="metric">
+          <span class="label">Влажность</span>
+          <span class="value" id="humidity">—</span>
+        </div>
+        <div class="metric">
+          <span class="label">Температура</span>
+          <span class="value" id="temperature">—</span>
+        </div>
+      </div>
+      <p class="status" id="sensor-status">
+        <span class="dot"></span>
+        <span id="sensor-label">Датчик доступен</span>
+      </p>
+    </div>
+  </section>
+  <section id="panel-history" hidden>
+    <p id="history-message" class="message" hidden></p>
+    <div id="charts">
+      <article class="panel chart-card">
+        <h2>Средняя влажность</h2>
+        <canvas id="humidity-chart"></canvas>
+      </article>
+      <article class="panel chart-card">
+        <h2>Средняя температура</h2>
+        <canvas id="temperature-chart"></canvas>
+      </article>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  var currentTimer = null;
+  var historyTimer = null;
+  var activeTab = "current";
+  var historyData = null;
+
+  var tabButtons = document.querySelectorAll("[data-tab]");
+  for (var i = 0; i < tabButtons.length; i++) {
+    tabButtons[i].addEventListener("click", function () {
+      showTab(this.getAttribute("data-tab"));
+    });
+  }
+
+  showTab("current");
+  window.addEventListener("resize", function () {
+    if (activeTab === "history") renderHistory();
+  });
+
+  function showTab(name) {
+    activeTab = name;
+    document.getElementById("panel-current").hidden = name !== "current";
+    document.getElementById("panel-history").hidden = name !== "history";
+
+    for (var i = 0; i < tabButtons.length; i++) {
+      tabButtons[i].classList.toggle("active", tabButtons[i].getAttribute("data-tab") === name);
+    }
+
+    if (currentTimer) clearInterval(currentTimer);
+    if (historyTimer) clearInterval(historyTimer);
+    currentTimer = null;
+    historyTimer = null;
+
+    if (name === "current") {
+      loadClimate();
+      currentTimer = setInterval(loadClimate, 1000);
+    } else {
+      if (historyData) renderHistory();
+      loadHistory();
+      historyTimer = setInterval(loadHistory, 60000);
+    }
+  }
+
+  function formatReading(value, unit) {
+    if (typeof value !== "number" || isNaN(value)) return "—";
+    return value.toFixed(1) + unit;
+  }
+
+  function loadClimate() {
+    fetch("/api/climate", { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("status");
+        return response.json();
+      })
+      .then(function (data) {
+        document.getElementById("humidity").textContent = formatReading(data.humidity, "%");
+        document.getElementById("temperature").textContent = formatReading(data.temperature, "°C");
+
+        var status = document.getElementById("sensor-status");
+        var available = data.available === true;
+        status.classList.toggle("ok", available);
+        status.classList.toggle("bad", !available);
+        document.getElementById("sensor-label").textContent = available
+          ? "Датчик доступен"
+          : "Датчик недоступен";
+      })
+      .catch(function () {});
+  }
+
+  function loadHistory() {
+    fetch("/api/history", { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("status");
+        return response.json();
+      })
+      .then(function (data) {
+        historyData = data;
+        renderHistory();
+      })
+      .catch(function () {
+        if (historyData) return;
+        showHistoryMessage("Не удалось загрузить историю");
+      });
+  }
+
+  function showHistoryMessage(text) {
+    var message = document.getElementById("history-message");
+    message.hidden = false;
+    message.textContent = text;
+    document.getElementById("charts").hidden = true;
+  }
+
+  function renderHistory() {
+    if (!historyData) return;
+
+    if (!historyData.synced) {
+      showHistoryMessage("Часы ещё не синхронизированы");
+      return;
+    }
+
+    document.getElementById("history-message").hidden = true;
+    document.getElementById("charts").hidden = false;
+
+    if (document.getElementById("panel-history").hidden) return;
+
+    var hours = historyData.hours || [];
+    drawChart(document.getElementById("humidity-chart"), hours, "humidity", "#2f6f5e");
+    drawChart(document.getElementById("temperature-chart"), hours, "temperature", "#c46b3a");
+  }
+
+  function drawChart(canvas, hours, key, color) {
+    var width = canvas.clientWidth;
+    var height = canvas.clientHeight;
+    if (width === 0 || height === 0) return;
+
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    var padLeft = 46;
+    var padRight = 12;
+    var padTop = 12;
+    var padBottom = 28;
+    var plotW = width - padLeft - padRight;
+    var plotH = height - padTop - padBottom;
+    var count = hours.length;
+
+    var min = null;
+    var max = null;
+    for (var i = 0; i < count; i++) {
+      var value = hours[i][key];
+      if (typeof value !== "number") continue;
+      if (min === null || value < min) min = value;
+      if (max === null || value > max) max = value;
+    }
+
+    if (min === null) {
+      min = 0;
+      max = 1;
+    } else if (min === max) {
+      min -= 1;
+      max += 1;
+    }
+
+    var span = max - min;
+    min -= span * 0.1;
+    max += span * 0.1;
+
+    ctx.font = "12px sans-serif";
+    ctx.strokeStyle = "#e4ddd2";
+    ctx.fillStyle = "#6e675e";
+    ctx.lineWidth = 1;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+
+    var gridLines = 4;
+    for (var g = 0; g <= gridLines; g++) {
+      var t = g / gridLines;
+      var y = padTop + plotH * t;
+      var tick = max - (max - min) * t;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, y);
+      ctx.lineTo(width - padRight, y);
+      ctx.stroke();
+      ctx.fillText(tick.toFixed(1), padLeft - 6, y);
+    }
+
+    function xAt(index) {
+      if (count <= 1) return padLeft + plotW / 2;
+      return padLeft + (plotW * index) / (count - 1);
+    }
+
+    function yAt(value) {
+      return padTop + ((max - value) / (max - min)) * plotH;
+    }
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    var step = count > 12 ? 4 : 1;
+    var lastLabel = -step;
+    for (var index = 0; index < count; index += step) {
+      drawHourLabel(ctx, hours[index], xAt(index), padTop + plotH + 8);
+      lastLabel = index;
+    }
+    if (count > 0 && count - 1 - lastLabel >= 2) {
+      drawHourLabel(ctx, hours[count - 1], xAt(count - 1), padTop + plotH + 8);
+    }
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    var drawing = false;
+    for (var p = 0; p < count; p++) {
+      var point = hours[p][key];
+      if (typeof point !== "number") {
+        drawing = false;
+        continue;
+      }
+      if (!drawing) {
+        ctx.moveTo(xAt(p), yAt(point));
+        drawing = true;
+      } else {
+        ctx.lineTo(xAt(p), yAt(point));
+      }
+    }
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    for (var d = 0; d < count; d++) {
+      var dot = hours[d][key];
+      if (typeof dot !== "number") continue;
+      ctx.beginPath();
+      ctx.arc(xAt(d), yAt(dot), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawHourLabel(ctx, hour, x, y) {
+    var date = new Date(hour.from * 1000);
+    var label = String(date.getHours()).padStart(2, "0") + ":00";
+    ctx.fillText(label, x, y);
+  }
+})();
+</script>
+</body>
+</html>

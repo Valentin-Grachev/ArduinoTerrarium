@@ -4,6 +4,11 @@
 
 constexpr uint32_t CONNECTION_TIMEOUT_MS = 5000;
 
+const IPAddress WIFI_IP(192, 168, 1, 50);
+const IPAddress WIFI_GATEWAY(192, 168, 1, 1);
+const IPAddress WIFI_SUBNET(255, 255, 255, 0);
+const IPAddress WIFI_DNS(192, 168, 1, 1);
+
 WifiConnection::WifiConnection() {
     _wifiState = WIFI_DISCONNECTED;
     _startConnectionTime = 0;
@@ -47,6 +52,7 @@ void WifiConnection::connect(const char* ssid, const char* password) {
 
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
+    WiFi.config(WIFI_IP, WIFI_GATEWAY, WIFI_SUBNET, WIFI_DNS);
     WiFi.begin(_ssid.c_str(), _password.c_str());
 }
 

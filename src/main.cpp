@@ -26,7 +26,7 @@ TemperatureHumiditySensor sensor(SDA_PIN, SCL_PIN);
 MeasureStorage storage(STORAGE_FILE_PATH);
 Button button(0);
 WifiConnection wifi;
-ServerHandler serverHandler(SERVER_PORT, &storage, &sensor);
+ServerHandler serverHandler(SERVER_PORT, &storage, &sensor, &clockModule);
 
 
 void setup() {
@@ -95,6 +95,12 @@ void setup() {
     clockModule.sync();
     sensor.enable();
     storage.setAutosave(&clockModule, &sensor, AUTOSAVE_INTERVAL_MS);
+
+    if (serverHandler.start()) {
+        Serial.println("Server Start: SUCCESS");
+    } else {
+        Serial.println("Server Start: ERROR");
+    }
 }
 
 void loop() {
@@ -105,4 +111,5 @@ void loop() {
     wifi.update();
     clockModule.update();
     storage.update();
+    serverHandler.update();
 }
